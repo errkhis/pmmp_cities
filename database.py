@@ -13,6 +13,9 @@ from psycopg.rows import dict_row
 FREE_CITY_LIMIT = 5
 PREMIUM_YEARS_DEFAULT = 1
 _DB_INITIALIZED = False
+USERS_TABLE = "cities_users"
+REQUESTS_TABLE = "city_requests"
+ADMIN_ACTIONS_TABLE = "cities_admin_actions"
 
 
 class DatabaseNotConfigured(RuntimeError):
@@ -102,8 +105,8 @@ def init_db() -> None:
         return
     with _connect() as conn:
         conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
+            f"""
+            CREATE TABLE IF NOT EXISTS {USERS_TABLE} (
                 telegram_id BIGINT PRIMARY KEY,
                 username TEXT,
                 first_name TEXT,
@@ -118,10 +121,10 @@ def init_db() -> None:
             """
         )
         conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS city_requests (
+            f"""
+            CREATE TABLE IF NOT EXISTS {REQUESTS_TABLE} (
                 id BIGSERIAL PRIMARY KEY,
-                telegram_id BIGINT NOT NULL REFERENCES users(telegram_id),
+                telegram_id BIGINT NOT NULL REFERENCES {USERS_TABLE}(telegram_id),
                 consultation_reference TEXT,
                 org_acronyme TEXT NOT NULL DEFAULT '',
                 consultation_url TEXT NOT NULL,
@@ -136,8 +139,8 @@ def init_db() -> None:
             """
         )
         conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS admin_actions (
+            f"""
+            CREATE TABLE IF NOT EXISTS {ADMIN_ACTIONS_TABLE} (
                 id BIGSERIAL PRIMARY KEY,
                 admin_telegram_id BIGINT,
                 target_telegram_id BIGINT NOT NULL,
@@ -157,8 +160,8 @@ def upsert_telegram_user(tg_user: dict) -> User:
     first_name = tg_user.get("first_name")
     with _connect() as conn:
         row = conn.execute(
-            """
-            INSERT INTO users (telegram_id, username, first_name)
+            f"""
+            INSERT INTO {USERS_TABLE} (telegram_id, username, first_name)
             VALUES (%s, %s, %s)
             ON CONFLICT (telegram_id) DO UPDATE SET
                 username = EXCLUDED.username,
@@ -175,7 +178,7 @@ def upsert_telegram_user(tg_user: dict) -> User:
 def count_users() -> int:
     init_db()
     with _connect() as conn:
-        row = conn.execute("SELECT COUNT(*) AS total FROM users").fetchone()
+        row = conn.execute(f"SELECT COUNT(*) AS total FROM {USERS_TABLE}").fetchone()
     return int(row["total"])
 
 
@@ -201,7 +204,7 @@ def record_city_request(
         with conn.transaction():
             row = conn.execute(
                 """
-                UPDATE users
+                UPDATE {USERS_TABLE}
                 SET free_city_requests_used = CASE
                         WHEN %s
                          AND NOT (
@@ -232,8 +235,8 @@ def record_city_request(
                 raise QuotaExceeded("Free city request limit exceeded")
 
             conn.execute(
-                """
-                INSERT INTO city_requests (
+                f"""
+                INSERT INTO {REQUESTS_TABLE} (
                     telegram_id, consultation_reference, org_acronyme, consultation_url,
                     consultation_object, success, quota_consumed, company_count,
                     error_message, result_snapshot
@@ -262,15 +265,15 @@ def grant_premium(telegram_id: int, years: int = PREMIUM_YEARS_DEFAULT, admin_te
     with _connect() as conn:
         with conn.transaction():
             row = conn.execute(
-                """
-                INSERT INTO users (telegram_id, plan, premium_expires_at)
+                f"""
+                INSERT INTO {USERS_TABLE} (telegram_id, plan, premium_expires_at)
                 VALUES (%s, 'premium', NOW() + (%s || ' years')::interval)
                 ON CONFLICT (telegram_id) DO UPDATE SET
                     plan = 'premium',
                     premium_expires_at = CASE
-                        WHEN users.premium_expires_at IS NOT NULL
-                         AND users.premium_expires_at > NOW()
-                        THEN users.premium_expires_at + (%s || ' years')::interval
+                        WHEN {USERS_TABLE}.premium_expires_at IS NOT NULL
+                         AND {USERS_TABLE}.premium_expires_at > NOW()
+                        THEN {USERS_TABLE}.premium_expires_at + (%s || ' years')::interval
                         ELSE NOW() + (%s || ' years')::interval
                     END,
                     updated_at = NOW()
@@ -288,8 +291,8 @@ def set_free(telegram_id: int, admin_telegram_id: Optional[int] = None) -> User:
     with _connect() as conn:
         with conn.transaction():
             row = conn.execute(
-                """
-                INSERT INTO users (telegram_id, plan)
+                f"""
+                INSERT INTO {USERS_TABLE} (telegram_id, plan)
                 VALUES (%s, 'free')
                 ON CONFLICT (telegram_id) DO UPDATE SET
                     plan = 'free',
@@ -306,8 +309,8 @@ def set_free(telegram_id: int, admin_telegram_id: Optional[int] = None) -> User:
 
 def _record_admin_action(conn, admin_telegram_id: Optional[int], target_telegram_id: int, action: str, payload: dict[str, Any]) -> None:
     conn.execute(
-        """
-        INSERT INTO admin_actions (admin_telegram_id, target_telegram_id, action, payload)
+        f"""
+        INSERT INTO {ADMIN_ACTIONS_TABLE} (admin_telegram_id, target_telegram_id, action, payload)
         VALUES (%s, %s, %s, %s::jsonb)
         """,
         (admin_telegram_id, target_telegram_id, action, json.dumps(payload)),
