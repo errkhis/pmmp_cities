@@ -203,7 +203,7 @@ def record_city_request(
     with _connect() as conn:
         with conn.transaction():
             row = conn.execute(
-                """
+                f"""
                 UPDATE {USERS_TABLE}
                 SET free_city_requests_used = CASE
                         WHEN %s
